@@ -6,6 +6,7 @@
 class MetasploitModule < Msf::Post
   include Msf::Post::Windows::Process
   include Msf::Post::Windows::Registry
+  include Msf::Post::Windows::Services
   include Msf::Auxiliary::Report
 
   def initialize(info = {})
@@ -17,7 +18,8 @@ class MetasploitModule < Msf::Post
           This module attempts to determine whether the system is running
           inside of a virtual environment and if so, which one. This
           module supports detection of Hyper-V, VMWare, VirtualBox, Xen, QEMU,
-          and Parallels.
+          and Parallels. The module can detect both virtualization and sandbox
+          environments simultaneously.
         },
         'License' => MSF_LICENSE,
         'Author' => [
@@ -53,15 +55,12 @@ class MetasploitModule < Msf::Post
 
   # loops over a list of services that are known to be signatures of vm's and
   # compares them to the list of running services.
-  def services_exist?(vm_services)
+  # Uses cached service list to minimize queries to the target system.
+  def vm_services_exist?(vm_services)
     vm_services.each do |srvc|
-      return true if service_exists?(srvc)
+      return true if @services.include?(srvc)
     end
     false
-  end
-
-  def service_exists?(service)
-    @services.include?(service)
   end
 
   # registers relevant keys and stores them in a hash
@@ -83,8 +82,9 @@ class MetasploitModule < Msf::Post
     false
   end
 
+  # Enumerates registry keys from the native registry view
   def get_srval(key)
-    srvals = registry_enumkeys(key)
+    srvals = registry_enumkeys(key, REGISTRY_VIEW_NATIVE)
     srvals = [] if srvals.nil?
     srvals
   end
@@ -101,8 +101,10 @@ class MetasploitModule < Msf::Post
     get_regval_str(key, val) == str
   end
 
+  # Retrieves registry value data from the native registry view to avoid
+  # WOW64 redirection issues on 64-bit systems
   def get_regval_str(key, valname)
-    ret = registry_getvaldata(key, valname)
+    ret = registry_getvaldata(key, valname, REGISTRY_VIEW_NATIVE)
     if ret.is_a?(Array)
       ret = ret.join
     end
@@ -136,7 +138,7 @@ class MetasploitModule < Msf::Post
       return true
     end
 
-    sfmsvals = registry_enumkeys('HKLM\\SOFTWARE\\Microsoft')
+    sfmsvals = registry_enumkeys('HKLM\\SOFTWARE\\Microsoft', REGISTRY_VIEW_NATIVE)
     if sfmsvals
       %w[Hyper-V VirtualMachine].each do |vm|
         return true if sfmsvals.include?(vm)
@@ -155,7 +157,7 @@ class MetasploitModule < Msf::Post
 
     hyperv_services = %w[vmicexchange]
 
-    return true if services_exist?(hyperv_services)
+    return true if vm_services_exist?(hyperv_services)
 
     false
   end
@@ -166,7 +168,7 @@ class MetasploitModule < Msf::Post
       tpvcgateway vmware wmci vmx86
     ]
 
-    return true if services_exist?(vmware_services)
+    return true if vm_services_exist?(vmware_services)
 
     @system_manufacturer = get_regval_str('HKLM\\HARDWARE\\DESCRIPTION\\System\\BIOS',
                                           'SystemManufacturer')
@@ -204,7 +206,7 @@ class MetasploitModule < Msf::Post
 
     vbox_srvcs = %w[VBoxMouse VBoxGuest VBoxService VBoxSF VBoxVideo]
 
-    if services_exist?(vbox_srvcs) || processes_exist?(vboxprocs)
+    if vm_services_exist?(vbox_srvcs) || processes_exist?(vboxprocs)
       return true
     end
 
@@ -235,7 +237,7 @@ class MetasploitModule < Msf::Post
 
     xen_srvcs = %w[xenevtchn xennet xennet6 xensvc xenvdb]
 
-    if processes_exist?(xenprocs) || services_exist?(xen_srvcs)
+    if processes_exist?(xenprocs) || vm_services_exist?(xen_srvcs)
       return true
     end
 
@@ -250,6 +252,9 @@ class MetasploitModule < Msf::Post
     if @system_bios_version =~ /qemu/i || @video_bios_version =~ /qemu/i
       return true
     end
+
+    # Cache SCSI port 0 identifier if not already cached
+    @scsi_port_0 ||= get_regval_str('HKLM\\HARDWARE\\DEVICEMAP\\Scsi\\Scsi Port 0\\Scsi Bus 0\\Target Id 0\\Logical Unit Id 0', 'Identifier')
 
     if @scsi_port_0 =~ /qemu|virtio/i || @system_manufacturer =~ /qemu/i
       return true
@@ -279,26 +284,34 @@ class MetasploitModule < Msf::Post
 
   def run
     print_status('Checking if the target is a Virtual Machine ...')
+
+    # Cache processes and services to minimize queries to the target
     @processes = get_processes
     @processes = [] if @processes.nil?
 
-    @services = registry_enumkeys('HKLM\\SYSTEM\\ControlSet001\\Services')
+    # Use native registry view to avoid WOW64 redirection
+    @services = registry_enumkeys('HKLM\\SYSTEM\\ControlSet001\\Services', REGISTRY_VIEW_NATIVE)
     @services = [] if @services.nil?
 
-    if parallels?
-      report_vm('Parallels')
-    elsif hyperv?
-      report_vm('Hyper-V')
-    elsif vmware?
-      report_vm('VMware')
-    elsif virtualbox?
-      report_vm('VirtualBox')
-    elsif xen?
-      report_vm('Xen')
-    elsif qemu?
-      report_vm('Qemu/KVM')
-    else
+    # NOTE: Detection methods have dependencies on instance variables set by earlier methods.
+    # parallels? sets @system_bios_version and @video_bios_version which are used by
+    # hyperv?, virtualbox?, and qemu?. The order of checks is intentional.
+
+    detected_vms = []
+
+    detected_vms << 'Parallels' if parallels?
+    detected_vms << 'Hyper-V' if hyperv?
+    detected_vms << 'VMware' if vmware?
+    detected_vms << 'VirtualBox' if virtualbox?
+    detected_vms << 'Xen' if xen?
+    detected_vms << 'Qemu/KVM' if qemu?
+
+    if detected_vms.empty?
       print_status('The target appears to be a Physical Machine')
+    else
+      detected_vms.each do |vm|
+        report_vm(vm)
+      end
     end
   end
 end
