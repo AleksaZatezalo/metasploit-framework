@@ -79,7 +79,7 @@ class MetasploitModule < Msf::Post
         'User'
       ]
     )
-    keys = registry_enumkeys('HKU')
+    keys = registry_enumkeys('HKU', REGISTRY_VIEW_NATIVE)
 
     return unless keys
 
