@@ -73,7 +73,7 @@ class MetasploitModule < Msf::Post
     key = 'HKLM\\System\\CurrentControlSet\\Control\\Network'
     value = 'NewNetworkWindowOff'
     begin
-      if !registry_getvaldata(key, value)
+      if !registry_getvaldata(key, value, REGISTRY_VIEW_NATIVE)
         registry_setvaldata(key, value, 3, 'REG_BINARY')
         print_good('Network Wizard disabled')
       end

@@ -81,7 +81,7 @@ class MetasploitModule < Msf::Post
     key = 'HKLM\\System\\CurrentControlSet\\Control\\Terminal Server'
     value = 'fDenyTSConnections'
     begin
-      v = registry_getvaldata(key, value)
+      v = registry_getvaldata(key, value, REGISTRY_VIEW_NATIVE)
       print_status 'Enabling Remote Desktop'
       if v == 1
         print_status "\tRDP is disabled; enabling it ..."

@@ -81,7 +81,7 @@ class MetasploitModule < Msf::Post
       regs.each do |reg|
         k = reg['key']
         v = reg['val']
-        rdata = registry_getvaldata(k, v)
+        rdata = registry_getvaldata(k, v, REGISTRY_VIEW_NATIVE)
         if rdata.to_s == reg['data']
           artifacts << "#{k}\\#{v}"
         end
